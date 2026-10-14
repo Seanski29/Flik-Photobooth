@@ -3,10 +3,10 @@
 
 // --- PIN DEFINITIONS ---
 const int PIN_BILL_ACCEPTOR = 2; // Hardware Interrupt Pin
-const int PIN_BUTTON        = 3; // Arcade Button Switch
-const int PIN_LED_ARCADE    = 4; // Arcade Button LED (Lights up at 200 PHP)
-const int PIN_LED_GREEN     = 7; // Printer Success LED
-const int PIN_LED_RED_SYS   = 8; // System Status (Always ON, off when ready/active)
+const int PIN_BUTTON        = 7; // Arcade Button Switch
+const int PIN_LED_ARCADE    = 8; // Arcade Button LED (Lights up at 200 PHP)
+const int PIN_LED_GREEN     = 9; // Printer Success LED
+const int PIN_LED_RED_SYS   = 10; // System status and countdown cue
 const int PIN_WS2812        = 11; // WS2812B Data Pin
 const int PIN_SWITCH_A      = 12; // Toggle Switch Left
 const int PIN_SWITCH_B      = 13; // Toggle Switch Right
@@ -158,6 +158,12 @@ void serialEvent() {
        isSessionActive = true;
        refreshStrip();
     }
+    else if (command == "RED_ON") {
+       digitalWrite(PIN_LED_RED_SYS, HIGH);
+    }
+    else if (command == "RED_OFF") {
+       digitalWrite(PIN_LED_RED_SYS, LOW);
+    }
      else if (command == "LED_STRIP_ON") {
        turnStripOn();
      }
@@ -174,8 +180,6 @@ void serialEvent() {
     } 
     else if (command == "GREEN_OFF") {
        digitalWrite(PIN_LED_GREEN, LOW);  
-       digitalWrite(PIN_LED_RED_SYS, HIGH);
-       refreshStrip();
     }
     else if (command.startsWith("SET_COLOR:")) {
        int red;

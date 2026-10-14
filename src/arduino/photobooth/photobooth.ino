@@ -5,6 +5,7 @@ const int buttonPin = 6;        // Arcade Button Switch (NO)
 const int filterSwitch1 = 13;   // Toggle Switch Left
 const int filterSwitch2 = 12;   // Toggle Switch Right
 const int buttonLEDPin = 6;     // Arcade Button LED Positive (+)
+const int systemRedLEDPin = 8;  // System status and countdown cue
 
 // --- FINANCIAL SETTINGS ---
 const int pricePerSession = 200; // Exact PHP required to start
@@ -29,7 +30,9 @@ void setup() {
 
   // Configure output for Button LED
   pinMode(buttonLEDPin, OUTPUT);
+  pinMode(systemRedLEDPin, OUTPUT);
   digitalWrite(buttonLEDPin, HIGH); 
+  digitalWrite(systemRedLEDPin, HIGH);
 
   // Hardware interrupt for money counting
   attachInterrupt(digitalPinToInterrupt(coinPin), pulseInterrupt, FALLING);
@@ -116,6 +119,23 @@ void serialEvent() {
     if (command == "SESSION_COMPLETE") {
        digitalWrite(buttonLEDPin, HIGH);   
        isSessionActive = false;            
+       digitalWrite(systemRedLEDPin, HIGH);
+    } else if (command == "IDLE") {
+       digitalWrite(systemRedLEDPin, HIGH);
+       digitalWrite(buttonLEDPin, LOW);
+       isSessionActive = false;
+    } else if (command == "READY_TO_START") {
+       digitalWrite(systemRedLEDPin, LOW);
+       digitalWrite(buttonLEDPin, HIGH);
+       isSessionActive = false;
+    } else if (command == "SESSION_START") {
+       digitalWrite(systemRedLEDPin, LOW);
+       digitalWrite(buttonLEDPin, LOW);
+       isSessionActive = true;
+    } else if (command == "RED_ON") {
+       digitalWrite(systemRedLEDPin, HIGH);
+    } else if (command == "RED_OFF") {
+       digitalWrite(systemRedLEDPin, LOW);
     }
   }
 }

@@ -63,6 +63,7 @@ function addLog(msg) {
     if (terminalHistory.length > MAX_LOGS) {
         terminalHistory.shift(); 
     }
+
     io.emit('terminal_log', msg);
 }
 
@@ -83,7 +84,7 @@ const DEFAULT_FILTERS = {
     NOIR: { name: 'Noir', intensity: 100, grayscale: 100, sepia: 0, contrast: 140, brightness: 95, saturation: 100, hue: 0, invert: 0, blur: 0 },
     FILM_II: { name: 'Film II', intensity: 100, grayscale: 0, sepia: 20, contrast: 110, brightness: 100, saturation: 180, hue: -5, invert: 0, blur: 0 }
 };
-let appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: DEFAULT_FILTERS, sessionPrice: 200 };
+let appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: DEFAULT_FILTERS, filterPresets: {}, sessionPrice: 200 };
 
 function normalizeFilter(filter, fallback) {
     const source = filter && typeof filter === 'object' ? filter : {};
@@ -112,6 +113,15 @@ function normalizeFilters(filters) {
     }, {});
 }
 
+function normalizeFilterPresets(presets) {
+    if (!presets || typeof presets !== 'object' || Array.isArray(presets)) return {};
+    return Object.entries(presets).reduce((result, [name, filters]) => {
+        if (typeof name !== 'string' || !name.trim() || !filters || typeof filters !== 'object') return result;
+        result[name.trim().slice(0, 40)] = normalizeFilters(filters);
+        return result;
+    }, {});
+}
+
 function loadConfig() {
     try {
         if (fs.existsSync(configFilePath)) {
@@ -119,13 +129,14 @@ function loadConfig() {
             appConfig.targetPrinter = appConfig.targetPrinter || appConfig.printerName || '';
             appConfig.printerName = appConfig.targetPrinter;
             appConfig.filters = normalizeFilters(appConfig.filters);
+            appConfig.filterPresets = normalizeFilterPresets(appConfig.filterPresets);
             appConfig.sessionPrice = normalizeSessionPrice(appConfig.sessionPrice);
         } else {
             saveConfig();
         }
     } catch (err) {
         console.error('Failed to read config.json:', err);
-        appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: normalizeFilters(), sessionPrice: 200 };
+        appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: normalizeFilters(), filterPresets: {}, sessionPrice: 200 };
     }
 }
 
@@ -181,6 +192,8 @@ let lockedSessionFilter = 'NORMAL';
 let lockedSessionFilterConfig = normalizeFilter(DEFAULT_FILTERS.NORMAL, DEFAULT_FILTERS.NORMAL);
 let sessionInProgress = false;
 let isFreePlayMode = false;
+let isTestShootMode = false;
+let currentSessionIsTestShoot = false;
 
 let arduinoConnected = false; 
 let isConnecting = false; 
@@ -192,6 +205,8 @@ let countdownTimerStart = 10;
 let sequenceInterval;
 let sequenceTimeout;
 let normalDebounce; 
+let countdownLedInterval;
+let countdownLedTimeout;
 
 let port; 
 let parser;
@@ -200,8 +215,6 @@ let billSoundCooldownUntil = 0;
 let systemRedState = null;
 let arcadeRedState = null;
 let greenLedState = null;
-let ledColor = { r: 255, g: 220, b: 140 };
-let ledDimness = 40;
 
 function formatDate(date) {
     const day = String(date.getDate()).padStart(2, '0');
@@ -289,7 +302,7 @@ function listInstalledPrinters() {
 function evaluateLEDState() {
     if (sessionInProgress) return; 
 
-    if (isFreePlayMode) {
+    if (isFreePlayMode || isTestShootMode) {
         sendHardwareCommand('READY_TO_START');
         io.emit('bg_music_command', 'STOP');
         return;
@@ -328,6 +341,12 @@ function sendHardwareCommand(command) {
             systemRedState = false;
             emitSoundEffect('red');
         }
+    } else if (command === 'RED_ON' || command === 'RED_OFF') {
+        const nextSystemRedState = command === 'RED_ON';
+        if (systemRedState !== nextSystemRedState) {
+            systemRedState = nextSystemRedState;
+            emitSoundEffect('red');
+        }
     } else if (command === 'GREEN_ON' || command === 'GREEN_OFF') {
         const nextGreenState = command === 'GREEN_ON';
         if (greenLedState !== nextGreenState) {
@@ -337,12 +356,43 @@ function sendHardwareCommand(command) {
     }
 }
 
-function sendLedColor(color) {
-    sendHardwareCommand(`SET_COLOR:${color.r},${color.g},${color.b}`);
+function stopCountdownLED() {
+    clearInterval(countdownLedInterval);
+    clearTimeout(countdownLedTimeout);
+    countdownLedInterval = undefined;
+    countdownLedTimeout = undefined;
+    sendHardwareCommand('RED_OFF');
 }
 
-function sendLedDimness(dimness) {
-    sendHardwareCommand(`SET_DIM:${dimness}`);
+function updateCountdownLED(second, totalSeconds) {
+    clearTimeout(countdownLedTimeout);
+    clearInterval(countdownLedInterval);
+    countdownLedInterval = undefined;
+    countdownLedTimeout = undefined;
+
+    if (second <= 0) {
+        sendHardwareCommand('RED_OFF');
+        return;
+    }
+
+    if (second === 1) {
+        sendHardwareCommand('RED_ON');
+        return;
+    }
+
+    const rapidStart = Math.max(2, Math.ceil(totalSeconds * 0.3));
+    if (second <= rapidStart) {
+        let isOn = true;
+        sendHardwareCommand('RED_ON');
+        countdownLedInterval = setInterval(() => {
+            isOn = !isOn;
+            sendHardwareCommand(isOn ? 'RED_ON' : 'RED_OFF');
+        }, 250);
+        return;
+    }
+
+    sendHardwareCommand('RED_ON');
+    countdownLedTimeout = setTimeout(() => sendHardwareCommand('RED_OFF'), 150);
 }
 
 function printCollage(imagePath) {
@@ -454,20 +504,21 @@ function capturePhoto() {
                 try {
                     await createCollage(currentSessionPhotos, collagePath, lockedSessionFilterConfig);
                     const imageUrl = `http://127.0.0.1:${PORT}/archive/${encodeURIComponent(collageName)}`;
-                    recordCompletedSession();
+                    if (!currentSessionIsTestShoot) recordCompletedSession();
                     
                     io.emit('collage_ready', imageUrl);
-                    addLog(`SUCCESS: Collage generated and sent to frontend.`);
+                    addLog(`SUCCESS: ${currentSessionIsTestShoot ? 'Test collage generated and sent to frontend (not printed).' : 'Collage generated and sent to frontend.'}`);
                     
-                    // Stop BG Music right as printer fires
+                    // Stop BG Music when the session output is ready.
                     io.emit('bg_music_command', 'STOP');
-                    printCollage(collagePath);
+                    if (!currentSessionIsTestShoot) printCollage(collagePath);
                     
                 } catch (err) {
                     addLog(`ERROR: Sharp failed to stitch collage.`);
                     console.error(err);
                 } finally {
                     currentSessionPhotos = []; 
+                    currentSessionIsTestShoot = false;
                     sessionInProgress = false; 
                     evaluateLEDState(); 
                 }
@@ -476,18 +527,20 @@ function capturePhoto() {
     });
 }
 
-async function startSessionLoop(isFreePlay = false) {
+async function startSessionLoop(isFreePlay = false, isTestShoot = false) {
     if (sessionInProgress || printJobActive) {
         addLog(">  Session already processing. Ignoring duplicate command.");
         return; 
     }
     
     sessionInProgress = true; 
+    currentSessionIsTestShoot = isTestShoot;
     addLog(">  Running  Diagnostics...");
 
     if (!arduinoConnected) {
         addLog("ERROR: ❌ SYSTEM HALTED. Master Controller (Arduino) offline.");
         sessionInProgress = false; 
+        currentSessionIsTestShoot = false;
         return; 
     }
 
@@ -495,6 +548,7 @@ async function startSessionLoop(isFreePlay = false) {
     if (!cameraReady) {
         addLog("ERROR: ❌ SYSTEM HALTED. DSLR Camera offline.");
         sessionInProgress = false; 
+        currentSessionIsTestShoot = false;
         return; 
     }
 
@@ -502,10 +556,12 @@ async function startSessionLoop(isFreePlay = false) {
     lockedSessionFilterConfig = normalizeFilter(appConfig.filters[activeFilter], DEFAULT_FILTERS[activeFilter] || DEFAULT_FILTERS.NORMAL);
     addLog(`>  Diagnostics passed. System Secured. Filter locked to: ${lockedSessionFilter}`);
     
-    if (!isFreePlay) {
+    if (!isFreePlay && !isTestShoot) {
     availableBalance -= appConfig.sessionPrice;
         io.emit('hardware_update', { type: 'balance', value: availableBalance });
     addLog(`>  Payment Accepted: ${appConfig.sessionPrice} PHP deducted. Remaining Balance: ${availableBalance} PHP.`);
+    } else if (isTestShoot) {
+        addLog(`>  Test shoot started. No balance deducted and no print will be produced.`);
     } else {
         addLog(`>  Free Play Enabled: No balance deducted.`);
     }
@@ -522,16 +578,19 @@ async function startSessionLoop(isFreePlay = false) {
         let prepTime = countdownTimerStart;
         addLog(`> ⏳ GETTING READY FOR PHOTO ${photoCount + 1}...`);
         
+        updateCountdownLED(prepTime, countdownTimerStart);
         io.emit('countdown_tick', prepTime); 
         addLog(`> ⏱️ ${prepTime}...`);
 
         sequenceInterval = setInterval(() => {
             prepTime--; 
+            updateCountdownLED(prepTime, countdownTimerStart);
             io.emit('countdown_tick', prepTime);
             addLog(`> ⏱️ ${prepTime}...`);
             
             if (prepTime === 0) {
                 clearInterval(sequenceInterval);
+                stopCountdownLED();
                 addLog(`>  TAKING PHOTO ${photoCount + 1}...`);
                 capturePhoto();
                 photoCount++;
@@ -591,9 +650,6 @@ async function connectToHardware() {
             } else {
                 arduinoConnected = true;
                 addLog(`>  System linked to Arduino on ${targetPort.path}`);
-                sendLedColor(ledColor);
-                sendLedDimness(ledDimness);
-                
                 port.set({ dtr: false }, () => {
                     setTimeout(() => port.set({ dtr: true }), 50);
                 });
@@ -640,6 +696,8 @@ async function connectToHardware() {
                     addLog(`>  Session already processing or printing. Ignoring duplicate button press.`);
                 } else if (isFreePlayMode) {
                     startSessionLoop(true);
+                } else if (isTestShootMode) {
+                    startSessionLoop(false, true);
                 } else if (availableBalance >= appConfig.sessionPrice) {
                     startSessionLoop(false); 
                 } else {
@@ -696,11 +754,9 @@ io.on('connection', (socket) => {
         socket.emit('printer_config', { target: appConfig.printerName });
         socket.emit('frame_config', { active: appConfig.activeFrame });
         socket.emit('filter_config', appConfig.filters);
+        socket.emit('filter_preset_list', Object.keys(appConfig.filterPresets));
         socket.emit('free_play_state', isFreePlayMode);
-        socket.emit('led_config', {
-            color: `#${ledColor.r.toString(16).padStart(2, '0')}${ledColor.g.toString(16).padStart(2, '0')}${ledColor.b.toString(16).padStart(2, '0')}`,
-            dimness: ledDimness
-        });
+        socket.emit('test_shoot_state', isTestShootMode);
         socket.emit(
             'bg_music_command',
             !isFreePlayMode && availableBalance >= appConfig.sessionPrice ? 'PLAY' : 'STOP'
@@ -725,6 +781,27 @@ io.on('connection', (socket) => {
             addLog('> Free Play mode disabled. Bill acceptance restored.');
         }
         io.emit('free_play_state', isFreePlayMode);
+    });
+
+    socket.on('toggle_test_shoot', (enabled, acknowledge = () => {}) => {
+        if (typeof acknowledge !== 'function') acknowledge = () => {};
+        if (typeof enabled !== 'boolean') {
+            socket.emit('test_shoot_error', 'Invalid test shoot mode value.');
+            acknowledge({ ok: false, error: 'Invalid Test Shoot mode value.' });
+            return;
+        }
+        if (sessionInProgress) {
+            socket.emit('test_shoot_error', 'Test shoot mode cannot change during an active session.');
+            acknowledge({ ok: false, error: 'Test Shoot mode cannot change during an active session.' });
+            return;
+        }
+        isTestShootMode = enabled;
+        io.emit('test_shoot_state', isTestShootMode);
+        evaluateLEDState();
+        const statusMessage = `> Test shoot mode ${enabled ? 'enabled' : 'disabled'}.`;
+        addLog(statusMessage);
+        io.emit('test_shoot_status', statusMessage);
+        acknowledge({ ok: true, enabled: isTestShootMode });
     });
 
     socket.on('update_price', (value) => {
@@ -763,6 +840,38 @@ io.on('connection', (socket) => {
         saveConfig();
         io.emit('filter_config', appConfig.filters);
         addLog('> Filter presets saved. Hardware toggle remains the session priority.');
+    });
+
+    socket.on('save_filter_preset', (payload) => {
+        if (!payload || typeof payload.name !== 'string' || !payload.name.trim() || !payload.filters || typeof payload.filters !== 'object') {
+            socket.emit('filter_error', 'Enter a preset name and valid filter settings.');
+            return;
+        }
+        const name = payload.name.trim().slice(0, 40);
+        appConfig.filterPresets[name] = normalizeFilters(payload.filters);
+        saveConfig();
+        io.emit('filter_preset_list', Object.keys(appConfig.filterPresets));
+        socket.emit('filter_preset_saved', { name, filters: appConfig.filterPresets[name] });
+        addLog(`> Filter collection saved: ${name}.`);
+    });
+
+    socket.on('load_filter_preset', (name) => {
+        if (typeof name !== 'string' || !appConfig.filterPresets[name]) {
+            socket.emit('filter_error', 'Filter collection not found.');
+            return;
+        }
+        socket.emit('filter_preset_loaded', { name, filters: appConfig.filterPresets[name] });
+    });
+
+    socket.on('delete_filter_preset', (name) => {
+        if (typeof name !== 'string' || !appConfig.filterPresets[name]) {
+            socket.emit('filter_error', 'Filter collection not found.');
+            return;
+        }
+        delete appConfig.filterPresets[name];
+        saveConfig();
+        io.emit('filter_preset_list', Object.keys(appConfig.filterPresets));
+        addLog(`> Filter collection deleted: ${name}.`);
     });
 
     socket.on('request_frames', () => {
@@ -883,43 +992,14 @@ io.on('connection', (socket) => {
     });
 
     socket.on('update_countdown', (val) => {
-        countdownTimerStart = parseInt(val);
+        const nextCountdown = Number(val);
+        if (!Number.isInteger(nextCountdown) || nextCountdown < 3 || nextCountdown > 10) {
+            socket.emit('countdown_error', 'Countdown must be between 3 and 10 seconds.');
+            return;
+        }
+        countdownTimerStart = nextCountdown;
         addLog(`>  TIMER UPDATED: Countdown set to ${countdownTimerStart} seconds.`);
         io.emit('sync_timer', countdownTimerStart);
-    });
-
-    socket.on('set_led_color', (color) => {
-        if (!color || typeof color !== 'object') {
-            socket.emit('led_error', 'Invalid LED color.');
-            return;
-        }
-        const channels = ['r', 'g', 'b'].map(channel => Number(color[channel]));
-        if (channels.some(channel => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
-            socket.emit('led_error', 'LED color channels must be integers from 0 to 255.');
-            return;
-        }
-        ledColor = { r: channels[0], g: channels[1], b: channels[2] };
-        sendLedColor(ledColor);
-        io.emit('led_config', {
-            color: `#${channels.map(channel => channel.toString(16).padStart(2, '0')).join('')}`,
-            dimness: ledDimness
-        });
-        addLog(`> LED color updated to RGB(${channels.join(', ')}).`);
-    });
-
-    socket.on('set_led_dimness', (value) => {
-        const nextDimness = Number(value);
-        if (!Number.isInteger(nextDimness) || nextDimness < 0 || nextDimness > 255) {
-            socket.emit('led_error', 'LED dimness must be an integer from 0 to 255.');
-            return;
-        }
-        ledDimness = nextDimness;
-        sendLedDimness(ledDimness);
-        io.emit('led_config', {
-            color: `#${ledColor.r.toString(16).padStart(2, '0')}${ledColor.g.toString(16).padStart(2, '0')}${ledColor.b.toString(16).padStart(2, '0')}`,
-            dimness: ledDimness
-        });
-        addLog(`> LED session brightness updated to ${ledDimness}.`);
     });
 
     socket.on('test_led', (cmd) => {
@@ -938,14 +1018,16 @@ io.on('connection', (socket) => {
     
     socket.on('force_start', () => {
         addLog(`>  FORCE START INITIALIZED`);
-        startSessionLoop(true); 
+        startSessionLoop(isTestShootMode ? false : true, isTestShootMode);
     });
     
     socket.on('abort_session', () => {
         addLog(`>  OPERATOR OVERRIDE: SESSION ABORTED`);
         clearInterval(sequenceInterval);
         clearTimeout(sequenceTimeout);
+        stopCountdownLED();
         sessionInProgress = false;
+        currentSessionIsTestShoot = false;
         currentSessionPhotos = [];
         evaluateLEDState(); 
         io.emit('hardware_update', { type: 'status', value: 'IDLE' });
@@ -1065,40 +1147,80 @@ function decodeImagePayload(payload, maxBytes = 50 * 1024 * 1024) {
 }
 
 async function createCustomCollage(photos, outputPath, framePath) {
-    const photoHeight = 389;
-    const slotPositions = [
-        [50, 144], [638, 144], [50, 545], [638, 545],
-        [50, 947], [638, 947], [50, 1350], [638, 1350]
-    ];
-    const slotWidths = [514, 514, 514, 514, 514, 514, 514, 514];
+    const photoHeight = COLLAGE_SLOT_HEIGHT;
+    const slotPositions = COLLAGE_SLOT_POSITIONS;
+    const slotWidths = COLLAGE_SLOT_POSITIONS.map(() => COLLAGE_SLOT_WIDTH);
     const slotPhotos = photos.length === 4
         ? [photos[0], photos[0], photos[1], photos[1], photos[2], photos[2], photos[3], photos[3]]
         : photos;
     const photoLayers = await Promise.all(slotPhotos.map(async (photo, index) => ({
-        input: await sharp(photo).resize(slotWidths[index], photoHeight, { fit: 'fill' }).jpeg().toBuffer(),
+        input: await sharp(photo).resize(slotWidths[index], photoHeight, { fit: 'cover', position: 'centre' }).jpeg().toBuffer(),
         left: slotPositions[index][0],
         top: slotPositions[index][1]
     })));
     const background = await sharp(framePath).resize(1200, 1800, { fit: 'fill' }).png().toBuffer();
-    await sharp(background).composite(photoLayers).jpeg({ quality: 90 }).toFile(outputPath);
+    const frameOverlay = await createFrameOverlay(framePath);
+    await sharp(background).composite(photoLayers.concat({ input: frameOverlay })).jpeg({ quality: 90 }).toFile(outputPath);
+}
+
+const COLLAGE_WIDTH = 1200;
+const COLLAGE_HEIGHT = 1800;
+const COLLAGE_SLOT_WIDTH = 514;
+const COLLAGE_SLOT_HEIGHT = 389;
+const COLLAGE_SLOT_POSITIONS = [
+    [50, 144], [638, 144], [50, 545], [638, 545],
+    [50, 947], [638, 947], [50, 1350], [638, 1350]
+];
+
+async function createFrameOverlay(framePath) {
+    const { data, info } = await sharp(framePath)
+        .resize(COLLAGE_WIDTH, COLLAGE_HEIGHT, { fit: 'fill' })
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+    for (const [left, top] of COLLAGE_SLOT_POSITIONS) {
+        for (let y = top; y < top + COLLAGE_SLOT_HEIGHT; y++) {
+            for (let x = left; x < left + COLLAGE_SLOT_WIDTH; x++) {
+                const offset = (y * info.width + x) * info.channels;
+                const red = data[offset];
+                const green = data[offset + 1];
+                const blue = data[offset + 2];
+                const isWhiteSlotPixel =
+                    red >= 210 &&
+                    green >= 210 &&
+                    blue >= 210 &&
+                    Math.max(red, green, blue) - Math.min(red, green, blue) <= 18;
+
+                if (isWhiteSlotPixel) data[offset + 3] = 0;
+            }
+        }
+    }
+
+    return sharp(data, {
+        raw: {
+            width: info.width,
+            height: info.height,
+            channels: 4
+        }
+    }).png().toBuffer();
 }
 
 async function createCollage(photos, outputPath, filterConfig) {
     try {
         // These coordinates match the eight photo slots in the 1200x1800 frames.
-        const photoWidth = 513;
-        const photoHeight = 389;
+        const photoWidth = COLLAGE_SLOT_WIDTH - 1;
+        const photoHeight = COLLAGE_SLOT_HEIGHT;
         const leftX = 50;
         const rightX = 638;
-        const leftPhotoWidth = 514;
-        const rightPhotoWidth = 514;
+        const leftPhotoWidth = COLLAGE_SLOT_WIDTH;
+        const rightPhotoWidth = COLLAGE_SLOT_WIDTH;
         const rowY = [144, 545, 947, 1350];
         const resizedImages = await Promise.all(
             photos.map(async (photoPath) => {
                 await waitForFile(photoPath);
-                // The frame slots are fixed-size rectangles; fill them instead of
-                // cropping the camera image and leaving the slot geometry ambiguous.
-                let img = sharp(photoPath).resize(photoWidth, photoHeight, { fit: 'fill' });
+                // Preserve the camera image proportions while filling each frame slot.
+                let img = sharp(photoPath).resize(photoWidth, photoHeight, { fit: 'cover', position: 'centre' });
                 
                 const filter = filterConfig || appConfig.filters.NORMAL;
                 const amount = filter.intensity / 100;
@@ -1143,18 +1265,21 @@ async function createCollage(photos, outputPath, filterConfig) {
         for (const [index, top] of rowY.entries()) {
             photoLayers.push({
                 input: await sharp(resizedImages[index])
-                    .resize(leftPhotoWidth, photoHeight, { fit: 'fill' }).jpeg().toBuffer(),
+                    .resize(leftPhotoWidth, photoHeight, { fit: 'cover', position: 'centre' }).jpeg().toBuffer(),
                 top,
                 left: leftX
             });
             photoLayers.push({
                 input: await sharp(resizedImages[index])
-                    .resize(rightPhotoWidth, photoHeight, { fit: 'fill' }).jpeg().toBuffer(),
+                    .resize(rightPhotoWidth, photoHeight, { fit: 'cover', position: 'centre' }).jpeg().toBuffer(),
                 top,
                 left: rightX
             });
         }
-        await sharp(backgroundInput).composite(photoLayers).jpeg({ quality: 90 }).toFile(outputPath);
+        const compositeLayers = activeFramePath
+            ? photoLayers.concat({ input: await createFrameOverlay(activeFramePath) })
+            : photoLayers;
+        await sharp(backgroundInput).composite(compositeLayers).jpeg({ quality: 90 }).toFile(outputPath);
 
         photos.forEach(photoPath => { 
             if (fs.existsSync(photoPath)) { try { fs.unlinkSync(photoPath); } catch(e) {} }

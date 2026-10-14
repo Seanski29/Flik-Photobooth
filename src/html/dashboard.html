@@ -349,13 +349,11 @@
                             <button id="btnTestArcRed" class="btn-test" style="background: #7f1d1d;" onclick="toggleArcadeRedLED()">Arcade Red: OFF</button>
                             
                             <button id="btnTestGreen" class="btn-test span-2" style="background: #14532d;" onclick="toggleGreenLED()">Printer Green LED: OFF</button>
-                            <button id="btnLedStrip" class="btn-test span-2" style="background: #22c55e;" onclick="toggleLedStrip()">LED Strip: ON</button>
                             
                             <button id="btnTestAudio" class="btn-test" style="background: #3b82f6;" onclick="toggleTestAudio()">Test Count Audio</button>
                             <button id="btnTestBGAudio" class="btn-test" style="background: #8b5cf6;" onclick="toggleBGAudio()">Test BG Music</button>
                             
                             <button id="btnTestPrinterSfx" class="btn-test span-2" style="background: #eab308; color: #000;" onclick="testPrinterSfx()">Test Printer SFX</button>
-                            <button class="btn-test span-2" style="background: #92400e;" onclick="restartLedStrip()">Restart LED Strip</button>
                         </div>
                     </div>
 
@@ -374,16 +372,6 @@
                                 <input type="range" id="timerSlider" min="3" max="10" value="10">
                             </div>
                         </div>
-                        <div class="settings-row">
-                            <div style="display:flex; flex-direction:column; align-items:center; gap: 4px;">
-                                <label for="ledColorPicker" style="font-size: 11px; color:#aaa;">LED Color</label>
-                                <input type="color" id="ledColorPicker" value="#ffdc8c" aria-label="LED strip color">
-                            </div>
-                            <div class="slider-box" style="flex: 1;">
-                                <label for="ledDimSlider">Session LED Brightness: <span id="ledDimLabel" style="color:#ef4444; font-weight: bold;">40</span></label>
-                                <input type="range" id="ledDimSlider" min="0" max="255" value="40">
-                            </div>
-                        </div>
                         <button class="btn-op" style="background: #444; margin-top: 8px;" type="button" onclick="toggleFullscreen()">Toggle Full Screen</button>
                     </div>
 
@@ -397,6 +385,7 @@
                             <button id="btnRestart" class="btn-op span-2" style="background: #4338ca;" onclick="triggerSystemRestart()">Restart System</button>
                         </div>
                         <button id="btnFreePlay" class="btn-op" style="margin-top: 8px; width: 100%;" onclick="toggleFreePlay()">Turn Off Bill Acceptor</button>
+                        <button id="btnTestShootMode" class="btn-op" style="margin-top: 8px; width: 100%; background: #7c3aed;" type="button">Test Shoot: OFF</button>
                     </div>
 
                 </div>
@@ -432,11 +421,9 @@
         const printerDisplay = document.getElementById('printerDisplay');
         const dashboardFramePreview = document.getElementById('dashboardFramePreview');
         const freePlayButton = document.getElementById('btnFreePlay');
-        const ledColorPicker = document.getElementById('ledColorPicker');
-        const ledDimSlider = document.getElementById('ledDimSlider');
-        const ledDimLabel = document.getElementById('ledDimLabel');
         
         let isFreePlayEnabled = false;
+        let isTestShootEnabled = false;
         let sessionPrice = 200;
         let configuredPrinterName = '';
         let filterPresets = {
@@ -560,6 +547,20 @@
             updateFreePlayButton(enabled);
         });
 
+        socket.on('test_shoot_state', (enabled) => {
+            updateTestShootButton(enabled);
+        });
+
+        socket.on('test_shoot_error', (message) => {
+            appendLog(`ERROR: ${message}`);
+        });
+
+        socket.on('test_shoot_status', (message) => {
+            if (typeof message !== 'string') return;
+            const lastEntry = terminalBox.lastElementChild;
+            if (!lastEntry || lastEntry.textContent !== message) appendLog(message);
+        });
+
         function updateFreePlayButton(enabled) {
             isFreePlayEnabled = enabled;
             if(enabled) {
@@ -582,6 +583,32 @@
                 socket.emit('toggle_free_play', enabling);
             }
         }
+
+        function updateTestShootButton(enabled) {
+            isTestShootEnabled = enabled;
+            const button = document.getElementById('btnTestShootMode');
+            button.classList.toggle('active', enabled);
+            button.innerText = `Test Shoot: ${enabled ? 'ON' : 'OFF'}`;
+            button.style.background = enabled ? '#a855f7' : '#7c3aed';
+        }
+
+        function toggleTestShootMode() {
+            const enabling = !isTestShootEnabled;
+            const message = enabling
+                ? 'Enable Test Shoot mode?\n\nThe next session started from the arcade button will capture photos without charging the customer or printing.'
+                : 'Disable Test Shoot mode and return to normal paid sessions?';
+            if (confirm(message)) {
+                updateTestShootButton(enabling);
+                socket.emit('toggle_test_shoot', enabling, response => {
+                    if (!response || !response.ok) {
+                        updateTestShootButton(!enabling);
+                        appendLog(`ERROR: ${response && response.error ? response.error : 'Test Shoot mode could not be changed.'}`);
+                    }
+                });
+            }
+        }
+
+        document.getElementById('btnTestShootMode').addEventListener('click', toggleTestShootMode);
 
         // PRINTER CONFIG
         socket.on('printer_config', (config) => {
@@ -679,38 +706,8 @@
             timerLabel.innerText = val + 's';
         });
 
-        function hexToRgb(hex) {
-            const match = /^#([0-9a-f]{6})$/i.exec(hex);
-            if (!match) return null;
-            const value = parseInt(match[1], 16);
-            return {
-                r: (value >> 16) & 255,
-                g: (value >> 8) & 255,
-                b: value & 255
-            };
-        }
-
-        ledColorPicker.addEventListener('input', (event) => {
-            const rgb = hexToRgb(event.target.value);
-            if (rgb) socket.emit('set_led_color', rgb);
-        });
-
-        ledDimSlider.addEventListener('input', (event) => {
-            ledDimLabel.innerText = event.target.value;
-            socket.emit('set_led_dimness', event.target.value);
-        });
-
-        socket.on('led_config', (config) => {
-            if (typeof config.color === 'string' && /^#[0-9a-f]{6}$/i.test(config.color)) {
-                ledColorPicker.value = config.color;
-            }
-            if (Number.isInteger(config.dimness) && config.dimness >= 0 && config.dimness <= 255) {
-                ledDimSlider.value = config.dimness;
-                ledDimLabel.innerText = config.dimness;
-            }
-        });
-
         socket.on('led_error', (message) => appendLog(`ERROR: ${message}`));
+        socket.on('countdown_error', (message) => appendLog(`ERROR: ${message}`));
         
         socket.on('countdown_tick', (second) => {
             let maxAudioSec = Math.min(timerSlider.value, 10); 
@@ -831,23 +828,6 @@
             }
         }
 
-        let isLedStripOn = true;
-        function toggleLedStrip() {
-            isLedStripOn = !isLedStripOn;
-            const button = document.getElementById('btnLedStrip');
-            socket.emit('test_led', isLedStripOn ? 'LED_STRIP_ON' : 'LED_STRIP_OFF');
-            button.style.background = isLedStripOn ? '#22c55e' : '#14532d';
-            button.innerText = `LED Strip: ${isLedStripOn ? 'ON' : 'OFF'}`;
-        }
-
-        function restartLedStrip() {
-            socket.emit('test_led', 'LED_STRIP_RESTART');
-            isLedStripOn = true;
-            const button = document.getElementById('btnLedStrip');
-            button.style.background = '#22c55e';
-            button.innerText = 'LED Strip: ON';
-        }
-
         document.getElementById('btnForceStart').addEventListener('click', () => {
             if (document.getElementById('sessionDisplay').innerText !== "CAMERA ACTIVE") { socket.emit('force_start'); }
         });
@@ -861,8 +841,6 @@
             document.getElementById('btnTestArcRed').style.background = '#7f1d1d'; document.getElementById('btnTestArcRed').innerText = 'Arcade Red: OFF';
             isGreenTestOn = false;
             document.getElementById('btnTestGreen').style.background = '#14532d'; document.getElementById('btnTestGreen').innerText = 'Printer Green LED: OFF';
-            isLedStripOn = true;
-            document.getElementById('btnLedStrip').style.background = '#22c55e'; document.getElementById('btnLedStrip').innerText = 'LED Strip: ON';
         });
 
         function triggerSystemRestart() {

@@ -39,6 +39,8 @@ let draftFilters = structuredClone(filterDefaults);
 
 const preview = document.getElementById('filter-preview');
 const select = document.getElementById('filter-select');
+const collectionSelect = document.getElementById('collection-select');
+const collectionName = document.getElementById('collection-name');
 const message = document.getElementById('filter-message');
 const status = document.getElementById('hardware-status');
 const fieldKeys = ['intensity', 'grayscale', 'sepia', 'contrast', 'brightness', 'saturation', 'hue', 'invert', 'blur'];
@@ -102,12 +104,64 @@ document.getElementById('save-filters').addEventListener('click', () => {
     setMessage('Filter presets saved. The Arduino toggle still controls the active session.', 'success');
 });
 
+document.getElementById('save-collection').addEventListener('click', () => {
+    const name = collectionName.value.trim();
+    if (!name) {
+        setMessage('Enter a collection name first.', 'error');
+        collectionName.focus();
+        return;
+    }
+    filterSocket.emit('save_filter_preset', { name, filters: draftFilters });
+});
+
+collectionSelect.addEventListener('change', () => {
+    if (collectionSelect.value) filterSocket.emit('load_filter_preset', collectionSelect.value);
+});
+
+document.getElementById('delete-collection').addEventListener('click', () => {
+    if (!collectionSelect.value) {
+        setMessage('Select a saved collection first.', 'error');
+        return;
+    }
+    if (confirm(`Delete the "${collectionSelect.value}" collection?`)) {
+        filterSocket.emit('delete_filter_preset', collectionSelect.value);
+    }
+});
+
 filterSocket.on('connect', () => filterSocket.emit('request_sync'));
 filterSocket.on('filter_config', filters => {
     savedFilters = structuredClone({ ...filterDefaults, ...filters });
     draftFilters = structuredClone(savedFilters);
     renderDraft();
     status.textContent = 'Saved presets loaded';
+});
+filterSocket.on('filter_preset_list', names => {
+    const current = collectionSelect.value;
+    collectionSelect.innerHTML = '';
+    if (!Array.isArray(names) || !names.length) {
+        collectionSelect.innerHTML = '<option value="">No saved collections</option>';
+        return;
+    }
+    names.forEach(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        collectionSelect.appendChild(option);
+    });
+    if (names.includes(current)) collectionSelect.value = current;
+});
+filterSocket.on('filter_preset_saved', ({ name, filters }) => {
+    savedFilters = structuredClone(filters);
+    draftFilters = structuredClone(filters);
+    renderDraft();
+    collectionName.value = '';
+    collectionSelect.value = name;
+    setMessage(`Collection "${name}" saved.`, 'success');
+});
+filterSocket.on('filter_preset_loaded', ({ name, filters }) => {
+    draftFilters = structuredClone(filters);
+    renderDraft();
+    setMessage(`Collection "${name}" loaded. Save Filters to make it the active booth configuration.`, 'success');
 });
 filterSocket.on('filter_error', error => setMessage(error, 'error'));
 

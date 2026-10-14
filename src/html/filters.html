@@ -49,6 +49,19 @@
                         <button id="save-filters" class="btn-primary" type="button">Save Filters</button>
                     </div>
                 </div>
+                <div class="filter-editor-toolbar" style="margin-top: 12px;">
+                    <div>
+                        <label for="collection-select">Saved collection</label>
+                        <select id="collection-select">
+                            <option value="">No saved collections</option>
+                        </select>
+                    </div>
+                    <div class="filter-actions">
+                        <input id="collection-name" type="text" maxlength="40" placeholder="Collection name" aria-label="New filter collection name">
+                        <button id="save-collection" class="btn-primary" type="button">Save Collection</button>
+                        <button id="delete-collection" class="btn-secondary" type="button">Delete Collection</button>
+                    </div>
+                </div>
 
                 <div class="filter-controls">
                     <div class="filter-control"><label for="intensity">Intensity <output data-output="intensity"></output></label><input id="intensity" type="range" min="0" max="100" step="1"></div>

@@ -1,9 +1,19 @@
 {
   "dailyRecords": [
     {
-      "date": "15/10/2026",
+      "date": "15/11/2026",
+      "revenue": 24600,
+      "sessions": 123
+    },
+    {
+      "date": "21/11/2026",
       "revenue": 200,
       "sessions": 1
+    },
+    {
+      "date": "22/11/2026",
+      "revenue": 1600,
+      "sessions": 8
     }
   ]
 }

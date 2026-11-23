@@ -1,6 +1,5 @@
 node_modules/
 dist/
-archive/*.jpg
+archive/
 assets/current_frame.png
 stats.json
-src\archive

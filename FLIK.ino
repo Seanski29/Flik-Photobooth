@@ -1,22 +1,12 @@
 #include <Arduino.h>
-#include <FastLED.h>
-
 // --- PIN DEFINITIONS ---
 const int PIN_BILL_ACCEPTOR = 2; // Hardware Interrupt Pin
 const int PIN_BUTTON        = 7; // Arcade Button Switch
 const int PIN_LED_ARCADE    = 8; // Arcade Button LED (Lights up at 200 PHP)
 const int PIN_LED_GREEN     = 9; // Printer Success LED
 const int PIN_LED_RED_SYS   = 10; // System status and countdown cue
-const int PIN_WS2812        = 11; // WS2812B Data Pin
 const int PIN_SWITCH_A      = 12; // Toggle Switch Left
 const int PIN_SWITCH_B      = 13; // Toggle Switch Right
-
-
-// --- WS2812B SETTINGS ---
-const int NUM_LEDS          = 30; // Adjust to match your strip
-CRGB leds[NUM_LEDS];
-CRGB warmWhite = CRGB(255, 220, 140); // Default warm yellowish-white
-uint8_t dimmedBrightness = 40;
 
 // --- FINANCIAL SETTINGS ---
 // The bill acceptor handles the 50 PHP math (e.g., sending 5 pulses if 1 pulse = 10 PHP).
@@ -27,7 +17,6 @@ volatile int totalPulses = 0;
 int currentBalance = 0;
 int lastReportedBalance = -1;
 bool isSessionActive = false;
-bool isStripEnabled = true;
 String lastFilter = "";
 
 void setup() {
@@ -44,17 +33,10 @@ void setup() {
   pinMode(PIN_LED_GREEN, OUTPUT);
   pinMode(PIN_LED_ARCADE, OUTPUT);
 
-  // Configure WS2812B Strip
-  FastLED.addLeds<WS2812B, PIN_WS2812, GRB>(leds, NUM_LEDS);
-
-  // Default Boot State: System Red ON, Arcade OFF, Green OFF, Strip Full Bright
+  // Default Boot State: System Red ON, Arcade OFF, Green OFF
   digitalWrite(PIN_LED_RED_SYS, HIGH);
   digitalWrite(PIN_LED_ARCADE, LOW);
   digitalWrite(PIN_LED_GREEN, LOW); 
-
-  FastLED.setBrightness(200); 
-  fill_solid(leds, NUM_LEDS, warmWhite);
-  FastLED.show();
 
   attachInterrupt(digitalPinToInterrupt(PIN_BILL_ACCEPTOR), pulseInterrupt, FALLING);
   Serial.println("SYSTEM_READY");
@@ -105,31 +87,6 @@ void pulseInterrupt() {
   }
 }
 
-void refreshStrip() {
-  if (!isStripEnabled) return;
-
-  FastLED.setBrightness(isSessionActive ? dimmedBrightness : 200);
-  fill_solid(leds, NUM_LEDS, warmWhite);
-  FastLED.show();
-}
-
-void turnStripOn() {
-  isStripEnabled = true;
-  refreshStrip();
-}
-
-void turnStripOff() {
-  isStripEnabled = false;
-  fill_solid(leds, NUM_LEDS, CRGB::Black);
-  FastLED.show();
-}
-
-void restartStrip() {
-  turnStripOff();
-  delay(100);
-  turnStripOn();
-}
-
 // --- FRONT-END COMMUNICATION ---
 void serialEvent() {
   while (Serial.available()) {
@@ -142,21 +99,20 @@ void serialEvent() {
        digitalWrite(PIN_LED_RED_SYS, HIGH);  
        digitalWrite(PIN_LED_ARCADE, LOW);    
        isSessionActive = false;
-       refreshStrip();
     }
     else if (command == "READY_TO_START") {
        // 200 PHP reached
        digitalWrite(PIN_LED_RED_SYS, LOW);   
        digitalWrite(PIN_LED_ARCADE, HIGH);   
+       digitalWrite(PIN_LED_GREEN, LOW);
        isSessionActive = false;
-       refreshStrip();
     } 
     else if (command == "SESSION_START") {
        // Camera is running
        digitalWrite(PIN_LED_RED_SYS, LOW);   
        digitalWrite(PIN_LED_ARCADE, LOW);    
+       digitalWrite(PIN_LED_GREEN, LOW);
        isSessionActive = true;
-       refreshStrip();
     }
     else if (command == "RED_ON") {
        digitalWrite(PIN_LED_RED_SYS, HIGH);
@@ -164,42 +120,18 @@ void serialEvent() {
     else if (command == "RED_OFF") {
        digitalWrite(PIN_LED_RED_SYS, LOW);
     }
-     else if (command == "LED_STRIP_ON") {
-       turnStripOn();
-     }
-     else if (command == "LED_STRIP_OFF") {
-       turnStripOff();
-     }
-     else if (command == "LED_STRIP_RESTART") {
-       restartStrip();
-     }
-    
+    else if (command == "PRINTING") {
+       digitalWrite(PIN_LED_RED_SYS, LOW);
+       digitalWrite(PIN_LED_ARCADE, HIGH);
+       digitalWrite(PIN_LED_GREEN, HIGH);
+       isSessionActive = false;
+    }
     // --- GREEN LED (Printer) ---
     else if (command == "GREEN_ON") {
        digitalWrite(PIN_LED_GREEN, HIGH); 
     } 
     else if (command == "GREEN_OFF") {
        digitalWrite(PIN_LED_GREEN, LOW);  
-    }
-    else if (command.startsWith("SET_COLOR:")) {
-       int red;
-       int green;
-       int blue;
-       String values = command.substring(10);
-       if (sscanf(values.c_str(), "%d,%d,%d", &red, &green, &blue) == 3 &&
-           red >= 0 && red <= 255 &&
-           green >= 0 && green <= 255 &&
-           blue >= 0 && blue <= 255) {
-          warmWhite = CRGB((uint8_t)red, (uint8_t)green, (uint8_t)blue);
-          refreshStrip();
-       }
-    }
-    else if (command.startsWith("SET_DIM:")) {
-       int brightness = command.substring(8).toInt();
-       if (brightness >= 0 && brightness <= 255) {
-          dimmedBrightness = (uint8_t)brightness;
-         refreshStrip();
-       }
     }
   }
 }

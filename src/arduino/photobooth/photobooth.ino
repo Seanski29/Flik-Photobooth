@@ -6,6 +6,7 @@ const int filterSwitch1 = 13;   // Toggle Switch Left
 const int filterSwitch2 = 12;   // Toggle Switch Right
 const int buttonLEDPin = 6;     // Arcade Button LED Positive (+)
 const int systemRedLEDPin = 8;  // System status and countdown cue
+const int printerGreenLEDPin = 9; // Printer activity indicator
 
 // --- FINANCIAL SETTINGS ---
 const int pricePerSession = 200; // Exact PHP required to start
@@ -31,8 +32,10 @@ void setup() {
   // Configure output for Button LED
   pinMode(buttonLEDPin, OUTPUT);
   pinMode(systemRedLEDPin, OUTPUT);
+  pinMode(printerGreenLEDPin, OUTPUT);
   digitalWrite(buttonLEDPin, HIGH); 
   digitalWrite(systemRedLEDPin, HIGH);
+  digitalWrite(printerGreenLEDPin, LOW);
 
   // Hardware interrupt for money counting
   attachInterrupt(digitalPinToInterrupt(coinPin), pulseInterrupt, FALLING);
@@ -120,22 +123,35 @@ void serialEvent() {
        digitalWrite(buttonLEDPin, HIGH);   
        isSessionActive = false;            
        digitalWrite(systemRedLEDPin, HIGH);
+       digitalWrite(printerGreenLEDPin, LOW);
     } else if (command == "IDLE") {
        digitalWrite(systemRedLEDPin, HIGH);
        digitalWrite(buttonLEDPin, LOW);
+       digitalWrite(printerGreenLEDPin, LOW);
        isSessionActive = false;
     } else if (command == "READY_TO_START") {
        digitalWrite(systemRedLEDPin, LOW);
        digitalWrite(buttonLEDPin, HIGH);
+       digitalWrite(printerGreenLEDPin, LOW);
        isSessionActive = false;
     } else if (command == "SESSION_START") {
        digitalWrite(systemRedLEDPin, LOW);
        digitalWrite(buttonLEDPin, LOW);
+       digitalWrite(printerGreenLEDPin, LOW);
        isSessionActive = true;
+    } else if (command == "PRINTING") {
+       digitalWrite(systemRedLEDPin, LOW);
+       digitalWrite(buttonLEDPin, HIGH);
+       digitalWrite(printerGreenLEDPin, HIGH);
+       isSessionActive = false;
     } else if (command == "RED_ON") {
        digitalWrite(systemRedLEDPin, HIGH);
     } else if (command == "RED_OFF") {
        digitalWrite(systemRedLEDPin, LOW);
+    } else if (command == "GREEN_ON") {
+       digitalWrite(printerGreenLEDPin, HIGH);
+    } else if (command == "GREEN_OFF") {
+       digitalWrite(printerGreenLEDPin, LOW);
     }
   }
 }

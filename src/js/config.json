@@ -1,7 +1,7 @@
 {
   "targetPrinter": "DS-RX1",
   "printerName": "DS-RX1",
-  "activeFrame": "5.png",
+  "activeFrame": "FUEGO.png",
   "filters": {
     "NORMAL": {
       "name": "Normal",
@@ -9,8 +9,8 @@
       "grayscale": 9,
       "sepia": 0,
       "contrast": 97,
-      "brightness": 119,
-      "saturation": 108,
+      "brightness": 136,
+      "saturation": 90,
       "hue": 0,
       "invert": 0,
       "blur": 0
@@ -21,7 +21,7 @@
       "grayscale": 100,
       "sepia": 0,
       "contrast": 121,
-      "brightness": 156,
+      "brightness": 139,
       "saturation": 95,
       "hue": 0,
       "invert": 0,
@@ -29,16 +29,18 @@
     },
     "FILM_II": {
       "name": "Film II",
-      "intensity": 96,
-      "grayscale": 43,
-      "sepia": 96,
-      "contrast": 116,
-      "brightness": 117,
-      "saturation": 146,
-      "hue": 14,
+      "intensity": 97,
+      "grayscale": 40,
+      "sepia": 97,
+      "contrast": 129,
+      "brightness": 113,
+      "saturation": 118,
+      "hue": 26,
       "invert": 0,
       "blur": 0
     }
   },
-  "sessionPrice": 200
+  "filterPresets": {},
+  "sessionPrice": 200,
+  "bgMusicEnabled": false
 }

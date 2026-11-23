@@ -84,7 +84,15 @@ const DEFAULT_FILTERS = {
     NOIR: { name: 'Noir', intensity: 100, grayscale: 100, sepia: 0, contrast: 140, brightness: 95, saturation: 100, hue: 0, invert: 0, blur: 0 },
     FILM_II: { name: 'Film II', intensity: 100, grayscale: 0, sepia: 20, contrast: 110, brightness: 100, saturation: 180, hue: -5, invert: 0, blur: 0 }
 };
-let appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: DEFAULT_FILTERS, filterPresets: {}, sessionPrice: 200 };
+let appConfig = {
+    targetPrinter: '',
+    printerName: '',
+    activeFrame: '',
+    filters: DEFAULT_FILTERS,
+    filterPresets: {},
+    sessionPrice: 200,
+    bgMusicEnabled: true
+};
 
 function normalizeFilter(filter, fallback) {
     const source = filter && typeof filter === 'object' ? filter : {};
@@ -131,12 +139,21 @@ function loadConfig() {
             appConfig.filters = normalizeFilters(appConfig.filters);
             appConfig.filterPresets = normalizeFilterPresets(appConfig.filterPresets);
             appConfig.sessionPrice = normalizeSessionPrice(appConfig.sessionPrice);
+            appConfig.bgMusicEnabled = appConfig.bgMusicEnabled !== false;
         } else {
             saveConfig();
         }
     } catch (err) {
         console.error('Failed to read config.json:', err);
-        appConfig = { targetPrinter: '', printerName: '', activeFrame: '', filters: normalizeFilters(), filterPresets: {}, sessionPrice: 200 };
+        appConfig = {
+            targetPrinter: '',
+            printerName: '',
+            activeFrame: '',
+            filters: normalizeFilters(),
+            filterPresets: {},
+            sessionPrice: 200,
+            bgMusicEnabled: true
+        };
     }
 }
 
@@ -300,21 +317,25 @@ function listInstalledPrinters() {
 }
 
 function evaluateLEDState() {
-    if (sessionInProgress) return; 
+    if (sessionInProgress || printJobActive) return;
 
     if (isFreePlayMode || isTestShootMode) {
         sendHardwareCommand('READY_TO_START');
-        io.emit('bg_music_command', 'STOP');
+        emitBackgroundMusicCommand('STOP');
         return;
     }
     
     if (availableBalance >= appConfig.sessionPrice) {
         sendHardwareCommand('READY_TO_START');
-        io.emit('bg_music_command', 'PLAY');
+        emitBackgroundMusicCommand('PLAY');
     } else {
         sendHardwareCommand('IDLE');
-        io.emit('bg_music_command', 'STOP');
+        emitBackgroundMusicCommand('STOP');
     }
+}
+
+function emitBackgroundMusicCommand(command) {
+    io.emit('bg_music_command', command === 'PLAY' && appConfig.bgMusicEnabled ? 'PLAY' : 'STOP');
 }
 
 function emitSoundEffect(name) {
@@ -324,22 +345,22 @@ function emitSoundEffect(name) {
 function sendHardwareCommand(command) {
     if (port && arduinoConnected) port.write(`${command}\n`);
 
-    if (command === 'IDLE' || command === 'SESSION_START') {
+    if (command === 'IDLE' || command === 'SESSION_START' || command === 'READY_TO_START' || command === 'PRINTING') {
         const nextSystemRedState = command === 'IDLE';
         if (systemRedState !== nextSystemRedState) {
             systemRedState = nextSystemRedState;
             emitSoundEffect('red');
         }
 
-        if (arcadeRedState !== false) arcadeRedState = false;
-    } else if (command === 'READY_TO_START') {
-        if (arcadeRedState !== true) {
-            arcadeRedState = true;
-            emitSoundEffect('arcade');
+        const nextArcadeRedState = command === 'READY_TO_START' || command === 'PRINTING';
+        if (arcadeRedState !== nextArcadeRedState) {
+            arcadeRedState = nextArcadeRedState;
+            if (nextArcadeRedState) emitSoundEffect('arcade');
         }
-        if (systemRedState !== false) {
-            systemRedState = false;
-            emitSoundEffect('red');
+        const nextGreenState = command === 'PRINTING';
+        if (greenLedState !== nextGreenState) {
+            greenLedState = nextGreenState;
+            if (nextGreenState) emitSoundEffect('green');
         }
     } else if (command === 'RED_ON' || command === 'RED_OFF') {
         const nextSystemRedState = command === 'RED_ON';
@@ -407,6 +428,7 @@ function printCollage(imagePath) {
     }
 
     printJobActive = true;
+    sendHardwareCommand('PRINTING');
     const finishPrintJob = () => { printJobActive = false; };
 
     const printCommand = `
@@ -451,15 +473,20 @@ $document.Dispose()
             FLIK_PRINT_PRINTER: appConfig.targetPrinter
         }
     }, (error, stdout, stderr) => {
-        finishPrintJob();
         if (error) {
+            finishPrintJob();
+            sendHardwareCommand('GREEN_OFF');
             const reason = error.killed ? 'The print command timed out.' : (stderr.trim() || error.message);
             addLog(`ERROR: Failed to print on [${appConfig.targetPrinter}]. ${reason}`);
+            evaluateLEDState();
             return;
         }
         addLog(`> 🖨️ Print job sent to [${appConfig.targetPrinter}] using the configured Windows printer.`);
-        sendHardwareCommand('GREEN_ON');
-        setTimeout(() => sendHardwareCommand('GREEN_OFF'), 20000);
+        setTimeout(() => {
+            finishPrintJob();
+            sendHardwareCommand('GREEN_OFF');
+            evaluateLEDState();
+        }, 20000);
     });
 }
 
@@ -510,7 +537,7 @@ function capturePhoto() {
                     addLog(`SUCCESS: ${currentSessionIsTestShoot ? 'Test collage generated and sent to frontend (not printed).' : 'Collage generated and sent to frontend.'}`);
                     
                     // Stop BG Music when the session output is ready.
-                    io.emit('bg_music_command', 'STOP');
+                    emitBackgroundMusicCommand('STOP');
                     if (!currentSessionIsTestShoot) printCollage(collagePath);
                     
                 } catch (err) {
@@ -757,10 +784,8 @@ io.on('connection', (socket) => {
         socket.emit('filter_preset_list', Object.keys(appConfig.filterPresets));
         socket.emit('free_play_state', isFreePlayMode);
         socket.emit('test_shoot_state', isTestShootMode);
-        socket.emit(
-            'bg_music_command',
-            !isFreePlayMode && availableBalance >= appConfig.sessionPrice ? 'PLAY' : 'STOP'
-        );
+        socket.emit('bg_music_state', appConfig.bgMusicEnabled);
+        socket.emit('bg_music_command', !isFreePlayMode && !isTestShootMode && availableBalance >= appConfig.sessionPrice && appConfig.bgMusicEnabled ? 'PLAY' : 'STOP');
         socket.emit('frame_list', listFrames());
         listInstalledPrinters().then(printers => socket.emit('printer_list', printers));
     });
@@ -781,6 +806,26 @@ io.on('connection', (socket) => {
             addLog('> Free Play mode disabled. Bill acceptance restored.');
         }
         io.emit('free_play_state', isFreePlayMode);
+    });
+
+    socket.on('toggle_bg_music', (enabled, acknowledge = () => {}) => {
+        if (typeof acknowledge !== 'function') acknowledge = () => {};
+        if (typeof enabled !== 'boolean') {
+            socket.emit('bg_music_error', 'Invalid Background Music setting.');
+            acknowledge({ ok: false, error: 'Invalid Background Music setting.' });
+            return;
+        }
+
+        appConfig.bgMusicEnabled = enabled;
+        saveConfig();
+        io.emit('bg_music_state', appConfig.bgMusicEnabled);
+        if (appConfig.bgMusicEnabled) {
+            evaluateLEDState();
+        } else {
+            emitBackgroundMusicCommand('STOP');
+        }
+        addLog(`> Background music ${enabled ? 'enabled' : 'disabled'}.`);
+        acknowledge({ ok: true, enabled: appConfig.bgMusicEnabled });
     });
 
     socket.on('toggle_test_shoot', (enabled, acknowledge = () => {}) => {

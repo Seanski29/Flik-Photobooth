@@ -215,6 +215,8 @@
         .settings-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
         .slider-box { flex: 1; background: #222; padding: 8px 12px; border-radius: 6px; display: flex; flex-direction: column; justify-content: center; }
         .slider-box label { font-size: 11px; color: #aaa; margin-bottom: 6px; display: flex; justify-content: space-between; }
+        #btnBackgroundMusic { background: #166534; }
+        #btnBackgroundMusic.active { background: #991b1b; }
         
         input[type=range] { appearance: none; -webkit-appearance: none; width: 100%; background: transparent; }
         input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: #ef4444; cursor: pointer; margin-top: -4px; }
@@ -372,6 +374,7 @@
                                 <input type="range" id="timerSlider" min="3" max="10" value="10">
                             </div>
                         </div>
+                        <button id="btnBackgroundMusic" class="btn-op" style="margin-top: 8px;" type="button" onclick="toggleBackgroundMusic()">Background Music: ON</button>
                         <button class="btn-op" style="background: #444; margin-top: 8px;" type="button" onclick="toggleFullscreen()">Toggle Full Screen</button>
                     </div>
 
@@ -424,6 +427,7 @@
         
         let isFreePlayEnabled = false;
         let isTestShootEnabled = false;
+        let isBackgroundMusicEnabled = true;
         let sessionPrice = 200;
         let configuredPrinterName = '';
         let filterPresets = {
@@ -453,6 +457,7 @@
         bgAudio.loop = true; 
         let overlayTimeout; 
         let audioUnlocked = false;
+        let backgroundMusicRequested = false;
 
         document.body.addEventListener('click', () => {
             if (!audioUnlocked) {
@@ -462,6 +467,9 @@
                     audio.currentTime = 0;
                 }))).then(() => {
                     audioUnlocked = true;
+                    if (isBackgroundMusicEnabled && backgroundMusicRequested && bgAudio.paused) {
+                        bgAudio.play().catch(() => {});
+                    }
                 }).catch(() => {});
             }
         }, { once: true });
@@ -502,16 +510,52 @@
         }
 
         socket.on('bg_music_command', (cmd) => {
-            if (cmd === 'PLAY') {
+            backgroundMusicRequested = cmd === 'PLAY' && isBackgroundMusicEnabled;
+            if (backgroundMusicRequested) {
                 bgAudio.play().catch(e => console.log(e));
-            } else if (cmd === 'STOP') {
+            } else {
                 bgAudio.pause();
                 bgAudio.currentTime = 0;
             }
         });
 
+        socket.on('bg_music_state', updateBackgroundMusicButton);
+
+        socket.on('bg_music_error', (message) => {
+            appendLog(`ERROR: ${message}`);
+        });
+
+        function updateBackgroundMusicButton(enabled) {
+            isBackgroundMusicEnabled = enabled;
+            const button = document.getElementById('btnBackgroundMusic');
+            button.classList.toggle('active', !enabled);
+            button.innerText = `Background Music: ${enabled ? 'ON' : 'OFF'}`;
+            if (!enabled) {
+                backgroundMusicRequested = false;
+                bgAudio.pause();
+                bgAudio.currentTime = 0;
+            }
+        }
+
+        function toggleBackgroundMusic() {
+            const enabling = !isBackgroundMusicEnabled;
+            updateBackgroundMusicButton(enabling);
+            socket.emit('toggle_bg_music', enabling, response => {
+                if (!response || !response.ok) {
+                    updateBackgroundMusicButton(!enabling);
+                    appendLog(`ERROR: ${response && response.error ? response.error : 'Background music setting could not be changed.'}`);
+                }
+            });
+        }
+
         function toggleBGAudio() {
             const btn = document.getElementById('btnTestBGAudio');
+            if (!isBackgroundMusicEnabled) {
+                bgAudio.pause();
+                bgAudio.currentTime = 0;
+                appendLog('> Background music is disabled in Settings & Filters.');
+                return;
+            }
             if (bgAudio.paused) {
                 bgAudio.play().then(() => { btn.innerHTML = "Stop BG Music"; })
                        .catch(err => appendLog("ERROR: BG Audio blocked."));
@@ -714,7 +758,9 @@
             if (second === maxAudioSec) {
                 countdownAudio.currentTime = 10 - maxAudioSec; 
                 countdownAudio.play().catch(err => {});
-                if (bgAudio.paused) bgAudio.play().catch(err => {});
+                if (isBackgroundMusicEnabled && bgAudio.paused) {
+                    bgAudio.play().catch(err => {});
+                }
             }
         });
 
